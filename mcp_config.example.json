@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "discord-manager": {
+      "command": "node",
+      "args": ["/home/ubuntu/moon-link/dist/index.js"],
+      "env": {
+        "DISCORD_BOT_TOKEN": "YOUR_DISCORD_BOT_TOKEN_HERE",
+        "DISCORD_GUILD_ID": "YOUR_DISCORD_SERVER_ID_HERE",
+        "ALLOWED_GUILD_IDS": "YOUR_DISCORD_SERVER_ID_HERE",
+        "MCP_TRANSPORT": "stdio",
+        "REQUIRE_CONFIRMATION": "true"
+      }
+    }
+  }
+}
