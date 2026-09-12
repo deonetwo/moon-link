@@ -7,8 +7,11 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
+    "mock": "node dist/index.js --mock",
+    "mock:sse": "node dist/index.js --sse --mock",
     "test": "tsx tests/security.test.ts",
-    "test:connection": "tsx scripts/test-connection.ts"
+    "test:connection": "tsx scripts/test-connection.ts",
+    "test:web": "tsx scripts/start-web-test.ts"
   },
   "keywords": [
     "mcp",

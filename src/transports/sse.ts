@@ -7,7 +7,11 @@ import { createMcpServer } from '../server.js';
 
 export async function runSseServer(config: AppConfig): Promise<void> {
   const app = express();
-  app.use(cors());
+  app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['*']
+  }));
 
   // Store active SSE transports by sessionId
   const transports = new Map<string, SSEServerTransport>();
@@ -56,6 +60,20 @@ export async function runSseServer(config: AppConfig): Promise<void> {
   // Health check endpoint
   app.get('/health', (_req, res) => {
     try {
+      if (config.mockMode) {
+        res.json({
+          status: 'healthy',
+          mode: 'SIMULATION / TEST (Mock Mode)',
+          uptimeSeconds: Math.floor(process.uptime()),
+          bot: {
+            ready: true,
+            user: 'MoonLinkMockBot#0001 (Simulated)',
+            guildsCount: 1
+          }
+        });
+        return;
+      }
+
       const client = getClient();
       res.json({
         status: 'healthy',
