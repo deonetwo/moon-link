@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { PermissionFlagsBits } from 'discord.js';
 import { z } from 'zod';
 import { AppConfig } from '../config.js';
-import { getBotMember, resolveGuild, resolveTextChannel } from '../discord.js';
+import { formatDiscordApiError, getBotMember, resolveGuild, resolveTextChannel } from '../discord.js';
 import { validateBotPermissions, validateSnowflake } from '../security.js';
 
 export function registerAuditTools(server: McpServer, _config: AppConfig) {
@@ -51,7 +51,7 @@ export function registerAuditTools(server: McpServer, _config: AppConfig) {
       } catch (err: any) {
         return {
           isError: true,
-          content: [{ type: 'text', text: `Error creating invite: ${err.message}` }]
+          content: [{ type: 'text', text: formatDiscordApiError(err, 'create_invite') }]
         };
       }
     }
@@ -93,7 +93,7 @@ export function registerAuditTools(server: McpServer, _config: AppConfig) {
       } catch (err: any) {
         return {
           isError: true,
-          content: [{ type: 'text', text: `Error listing invites: ${err.message}` }]
+          content: [{ type: 'text', text: formatDiscordApiError(err, 'list_invites') }]
         };
       }
     }
@@ -141,7 +141,7 @@ export function registerAuditTools(server: McpServer, _config: AppConfig) {
       } catch (err: any) {
         return {
           isError: true,
-          content: [{ type: 'text', text: `Error fetching audit logs: ${err.message}` }]
+          content: [{ type: 'text', text: formatDiscordApiError(err, 'get_audit_logs') }]
         };
       }
     }

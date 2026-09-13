@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ColorResolvable, PermissionFlagsBits } from 'discord.js';
 import { z } from 'zod';
 import { AppConfig } from '../config.js';
-import { formatRole, getBotMember, resolveGuild, resolveMember, resolveRole } from '../discord.js';
+import { formatDiscordApiError, formatRole, getBotMember, resolveGuild, resolveMember, resolveRole } from '../discord.js';
 import { enforceConfirmation, validateBotPermissions, validateRoleHierarchy } from '../security.js';
 
 export function registerRoleTools(server: McpServer, config: AppConfig) {
@@ -39,7 +39,7 @@ export function registerRoleTools(server: McpServer, config: AppConfig) {
       } catch (err: any) {
         return {
           isError: true,
-          content: [{ type: 'text', text: `Error assigning role: ${err.message}` }]
+          content: [{ type: 'text', text: formatDiscordApiError(err, 'assign_role') }]
         };
       }
     }
@@ -78,7 +78,7 @@ export function registerRoleTools(server: McpServer, config: AppConfig) {
       } catch (err: any) {
         return {
           isError: true,
-          content: [{ type: 'text', text: `Error removing role: ${err.message}` }]
+          content: [{ type: 'text', text: formatDiscordApiError(err, 'remove_role') }]
         };
       }
     }
@@ -120,7 +120,7 @@ export function registerRoleTools(server: McpServer, config: AppConfig) {
       } catch (err: any) {
         return {
           isError: true,
-          content: [{ type: 'text', text: `Error creating role: ${err.message}` }]
+          content: [{ type: 'text', text: formatDiscordApiError(err, 'create_role') }]
         };
       }
     }
@@ -161,7 +161,7 @@ export function registerRoleTools(server: McpServer, config: AppConfig) {
       } catch (err: any) {
         return {
           isError: true,
-          content: [{ type: 'text', text: `Error deleting role: ${err.message}` }]
+          content: [{ type: 'text', text: formatDiscordApiError(err, 'delete_role') }]
         };
       }
     }

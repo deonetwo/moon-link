@@ -1,12 +1,14 @@
 import {
   ChannelType,
   Client,
+  DiscordAPIError,
   GatewayIntentBits,
   Guild,
   GuildBasedChannel,
   GuildMember,
   Message,
   Partials,
+  RateLimitData,
   Role,
   TextBasedChannel
 } from 'discord.js';
@@ -17,7 +19,8 @@ let discordClient: Client | null = null;
 let clientConfig: AppConfig | null = null;
 
 /**
- * Initializes and connects the Discord.js Client with necessary Gateway Intents
+ * Initializes the Discord.js Client with strictly necessary Gateway Intents
+ * for channel and message management.
  */
 export async function initDiscordClient(config: AppConfig): Promise<Client> {
   if (discordClient && discordClient.isReady()) {
@@ -25,33 +28,35 @@ export async function initDiscordClient(config: AppConfig): Promise<Client> {
   }
 
   if (!config.discordToken) {
-    throw new Error('DISCORD_BOT_TOKEN is missing. Please provide it in your .env file or environment.');
+    throw new Error('DISCORD_BOT_TOKEN is not configured in process.env or .env file.');
   }
 
   clientConfig = config;
 
+  // Minimal Gateway Intents strictly required for operations
   discordClient = new Client({
     intents: [
       GatewayIntentBits.Guilds,
-      GatewayIntentBits.GuildMembers,
       GatewayIntentBits.GuildMessages,
-      GatewayIntentBits.MessageContent,
-      GatewayIntentBits.GuildModeration,
-      GatewayIntentBits.GuildMessageReactions,
-      GatewayIntentBits.GuildInvites,
-      GatewayIntentBits.GuildEmojisAndStickers
+      GatewayIntentBits.MessageContent
     ],
     partials: [
       Partials.Message,
       Partials.Channel,
-      Partials.Reaction,
-      Partials.GuildMember,
       Partials.User
     ]
   });
 
+  // REST API Rate limit event monitoring
+  discordClient.rest.on('rateLimited', (rateLimitData: RateLimitData) => {
+    console.error(
+      `[Discord] ⚠️ REST Rate limit encountered! Route: ${rateLimitData.route} | ` +
+      `Timeout: ${rateLimitData.timeToReset}ms | Global: ${rateLimitData.global} | Limit: ${rateLimitData.limit}`
+    );
+  });
+
   return new Promise((resolve, reject) => {
-    if (!discordClient) return reject(new Error('Discord client failed to allocate'));
+    if (!discordClient) return reject(new Error('Discord client failed to allocate.'));
 
     discordClient.once('ready', (readyClient) => {
       console.error(`[Discord] Bot connected successfully as ${readyClient.user.tag} (ID: ${readyClient.user.id})`);
@@ -59,7 +64,7 @@ export async function initDiscordClient(config: AppConfig): Promise<Client> {
     });
 
     discordClient.on('error', (err) => {
-      console.error('[Discord] Client error:', err.message);
+      console.error('[Discord] Client network error:', err.message);
     });
 
     discordClient.on('warn', (warning) => {
@@ -67,7 +72,7 @@ export async function initDiscordClient(config: AppConfig): Promise<Client> {
     });
 
     discordClient.login(config.discordToken).catch((err) => {
-      console.error('[Discord] Login failed:', err.message);
+      console.error('[Discord] Authentication failed:', err.message);
       reject(err);
     });
   });
@@ -78,6 +83,39 @@ export function getClient(): Client {
     throw new Error('Discord client is not ready. Ensure bot token is valid and client is connected.');
   }
   return discordClient;
+}
+
+/**
+ * Translates Discord API errors into clean, structured messages to ensure
+ * unhandled exceptions or rejected promises never crash the MCP process.
+ */
+export function formatDiscordApiError(err: any, actionContext: string): string {
+  if (err instanceof DiscordAPIError) {
+    switch (err.code) {
+      case 50013:
+        return `Discord Permission Error during ${actionContext}: Missing Permissions. Ensure the bot's role has the required permissions and is positioned high enough in Server Settings > Roles.`;
+      case 50001:
+        return `Discord Access Error during ${actionContext}: Missing Access. The bot cannot see or access the target channel/guild.`;
+      case 10003:
+        return `Discord Not Found Error during ${actionContext}: Unknown Channel. The specified channel ID does not exist in this server.`;
+      case 10008:
+        return `Discord Not Found Error during ${actionContext}: Unknown Message. The specified message ID does not exist or was deleted.`;
+      case 10014:
+        return `Discord Not Found Error during ${actionContext}: Unknown Emoji. Custom emoji could not be resolved.`;
+      case 40005:
+        return `Discord Payload Error during ${actionContext}: Request entity too large (exceeded Discord upload/message limits).`;
+      case 429:
+        return `Discord Rate Limit Error during ${actionContext}: Request throttled by Discord. Please retry after backoff.`;
+      default:
+        return `Discord API Error [${err.code}] during ${actionContext}: ${err.message}`;
+    }
+  }
+
+  if (err.status === 429) {
+    return `Discord Rate Limit (429) during ${actionContext}: Exceeded API rate limits.`;
+  }
+
+  return `Error during ${actionContext}: ${err instanceof Error ? err.message : String(err)}`;
 }
 
 /**
@@ -95,8 +133,8 @@ export async function resolveGuild(providedGuildId?: string): Promise<Guild> {
   if (!guild) {
     try {
       guild = await client.guilds.fetch(guildId);
-    } catch {
-      throw new Error(`Guild with ID "${guildId}" not found or bot has not been invited to it.`);
+    } catch (err) {
+      throw new Error(formatDiscordApiError(err, `fetch guild "${guildId}"`));
     }
   }
 
@@ -109,7 +147,11 @@ export async function resolveGuild(providedGuildId?: string): Promise<Guild> {
 export async function getBotMember(guild: Guild): Promise<GuildMember> {
   const client = getClient();
   if (!client.user) throw new Error('Client user not defined');
-  return guild.members.fetch(client.user.id);
+  try {
+    return await guild.members.fetch(client.user.id);
+  } catch (err) {
+    throw new Error(formatDiscordApiError(err, 'fetch bot guild member'));
+  }
 }
 
 /**
@@ -121,11 +163,15 @@ export async function resolveChannel(channelId: string, guildId?: string): Promi
 
   let channel = guild.channels.cache.get(validChannelId);
   if (!channel) {
-    const fetched = await guild.channels.fetch(validChannelId).catch(() => null);
-    if (!fetched) {
-      throw new Error(`Channel "${validChannelId}" not found in server "${guild.name}" (${guild.id}).`);
+    try {
+      const fetched = await guild.channels.fetch(validChannelId);
+      if (!fetched) {
+        throw new Error(`Channel "${validChannelId}" not found in server "${guild.name}" (${guild.id}).`);
+      }
+      channel = fetched;
+    } catch (err) {
+      throw new Error(formatDiscordApiError(err, `fetch channel "${validChannelId}"`));
     }
-    channel = fetched;
   }
 
   return channel;
@@ -137,7 +183,7 @@ export async function resolveChannel(channelId: string, guildId?: string): Promi
 export async function resolveTextChannel(channelId: string, guildId?: string): Promise<TextBasedChannel & GuildBasedChannel> {
   const channel = await resolveChannel(channelId, guildId);
   if (!channel.isTextBased()) {
-    throw new Error(`Channel "${channel.name}" (${channel.id}) is not a text-capable channel (type: ${ChannelType[channel.type]}).`);
+    throw new Error(`Channel #${channel.name} (${channel.id}) is not a text-capable channel (type: ${ChannelType[channel.type]}).`);
   }
   return channel as TextBasedChannel & GuildBasedChannel;
 }
@@ -151,8 +197,8 @@ export async function resolveMember(userId: string, guildId?: string): Promise<G
 
   try {
     return await guild.members.fetch(validUserId);
-  } catch {
-    throw new Error(`Member with ID "${validUserId}" not found in server "${guild.name}".`);
+  } catch (err) {
+    throw new Error(formatDiscordApiError(err, `fetch member "${validUserId}"`));
   }
 }
 
@@ -163,10 +209,19 @@ export async function resolveRole(roleId: string, guildId?: string): Promise<Rol
   const validRoleId = validateSnowflake(roleId, 'roleId');
   const guild = await resolveGuild(guildId);
 
-  const role = guild.roles.cache.get(validRoleId) || (await guild.roles.fetch(validRoleId).catch(() => null));
+  let role = guild.roles.cache.get(validRoleId);
   if (!role) {
-    throw new Error(`Role with ID "${validRoleId}" not found in server "${guild.name}".`);
+    try {
+      const fetched = await guild.roles.fetch(validRoleId);
+      if (!fetched) {
+        throw new Error(`Role with ID "${validRoleId}" not found in server "${guild.name}".`);
+      }
+      role = fetched;
+    } catch (err) {
+      throw new Error(formatDiscordApiError(err, `fetch role "${validRoleId}"`));
+    }
   }
+
   return role;
 }
 

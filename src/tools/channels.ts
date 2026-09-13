@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ChannelType, PermissionFlagsBits } from 'discord.js';
 import { z } from 'zod';
 import { AppConfig } from '../config.js';
-import { formatChannel, getBotMember, resolveChannel, resolveGuild } from '../discord.js';
+import { formatChannel, formatDiscordApiError, getBotMember, resolveChannel, resolveGuild } from '../discord.js';
 import { enforceConfirmation, validateBotPermissions, validateSnowflake } from '../security.js';
 
 export function registerChannelTools(server: McpServer, config: AppConfig) {
@@ -64,7 +64,7 @@ export function registerChannelTools(server: McpServer, config: AppConfig) {
       } catch (err: any) {
         return {
           isError: true,
-          content: [{ type: 'text', text: `Error creating channel: ${err.message}` }]
+          content: [{ type: 'text', text: formatDiscordApiError(err, 'create_channel') }]
         };
       }
     }
@@ -121,7 +121,7 @@ export function registerChannelTools(server: McpServer, config: AppConfig) {
       } catch (err: any) {
         return {
           isError: true,
-          content: [{ type: 'text', text: `Error modifying channel: ${err.message}` }]
+          content: [{ type: 'text', text: formatDiscordApiError(err, 'modify_channel') }]
         };
       }
     }
@@ -163,7 +163,7 @@ export function registerChannelTools(server: McpServer, config: AppConfig) {
       } catch (err: any) {
         return {
           isError: true,
-          content: [{ type: 'text', text: `Error deleting channel: ${err.message}` }]
+          content: [{ type: 'text', text: formatDiscordApiError(err, 'delete_channel') }]
         };
       }
     }

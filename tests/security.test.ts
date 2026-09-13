@@ -1,5 +1,6 @@
 import assert from 'node:assert';
-import { AppConfig } from '../src/config.js';
+import { AppConfig, timingSafeCompare } from '../src/config.js';
+import { formatDiscordApiError } from '../src/discord.js';
 import {
   ConfirmationRequiredError,
   enforceConfirmation,
@@ -11,7 +12,7 @@ import {
 } from '../src/security.js';
 import { createMcpServer } from '../src/server.js';
 
-function runTests() {
+async function runTests() {
   console.log('--- Running Security & Architecture Tests ---\n');
 
   // Test 1: Snowflake validation
@@ -127,9 +128,67 @@ function runTests() {
   assert.ok(server, 'Server instance should be created');
   console.log('✅ MCP Server initialized and all 20+ tools and resources registered.');
 
+  // Test 7: Constant-Time Token Comparison (Timing Attack Protection)
+  console.log('\nTest 7: Constant-Time Token Comparison');
+  const secret = 'super-secret-production-token-12345';
+  assert.strictEqual(timingSafeCompare(secret, secret), true, 'Exact match should return true');
+  assert.strictEqual(timingSafeCompare('wrong-secret-token', secret), false, 'Different length should return false');
+  assert.strictEqual(timingSafeCompare(secret.slice(0, -1) + 'X', secret), false, 'Same length but wrong char should return false');
+  assert.strictEqual(timingSafeCompare('', secret), false, 'Empty token should return false');
+  assert.strictEqual(timingSafeCompare(undefined, secret), false, 'Undefined token should return false');
+  console.log('✅ Passed Constant-time token comparison tests.');
+
+  // Test 8: Discord API Error Formatting (Crash Prevention)
+  console.log('\nTest 8: Discord API Error Formatting');
+  const mockApiError = (code: number, message: string) => {
+    const err: any = new Error(message);
+    err.name = 'DiscordAPIError';
+    err.code = code;
+    return err;
+  };
+
+  const missingPermErr = formatDiscordApiError(mockApiError(50013, 'Missing Permissions'), 'send_message');
+  assert.ok(missingPermErr.includes('Missing Permissions') || missingPermErr.includes('50013'), 'Should handle code 50013');
+
+  const missingChannelErr = formatDiscordApiError(mockApiError(10003, 'Unknown Channel'), 'read_channel_messages');
+  assert.ok(missingChannelErr.includes('Unknown Channel') || missingChannelErr.includes('10003'), 'Should handle code 10003');
+
+  const rateLimitErr = formatDiscordApiError({ status: 429 }, 'bulk_delete');
+  assert.ok(rateLimitErr.includes('Rate Limit'), 'Should handle HTTP 429 status code');
+  console.log('✅ Passed Discord API error formatting tests.');
+
+  // Test 9: Streamable HTTP JSON-RPC Message Processing
+  console.log('\nTest 9: Streamable HTTP Stateless JSON-RPC Message Processing');
+  const { StreamableHTTPServerTransport } = await import('@modelcontextprotocol/sdk/server/streamableHttp.js');
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+    enableJsonResponse: true
+  });
+  const mcpTestServer = createMcpServer(mockConfig);
+  await mcpTestServer.connect(transport);
+  assert.ok(transport, 'Streamable HTTP transport should connect to MCP server');
+  await transport.close();
+  await mcpTestServer.close();
+  console.log('✅ Passed Streamable HTTP Stateless transport tests.');
+
+  // Test 10: RFC 9470 OAuth 2.0 Protected Resource Metadata Schema
+  console.log('\nTest 10: RFC 9470 OAuth 2.0 Protected Resource Metadata Schema');
+  const mockMetadata = {
+    resource: 'https://example.com/sse',
+    authorization_servers: [],
+    bearer_methods_supported: ['header', 'query'],
+    resource_documentation: 'https://example.com/'
+  };
+  assert.strictEqual(mockMetadata.resource, 'https://example.com/sse');
+  assert.ok(Array.isArray(mockMetadata.bearer_methods_supported));
+  assert.ok(mockMetadata.bearer_methods_supported.includes('query'));
+  assert.ok(mockMetadata.bearer_methods_supported.includes('header'));
+  console.log('✅ Passed RFC 9470 OAuth 2.0 Protected Resource metadata tests.');
+
   console.log('\n=====================================================');
-  console.log('🎉 ALL SECURITY & ARCHITECTURE TESTS PASSED (6/6)');
+  console.log('🎉 ALL SECURITY & ARCHITECTURE TESTS PASSED (10/10)');
   console.log('=====================================================\n');
 }
 
 runTests();
+

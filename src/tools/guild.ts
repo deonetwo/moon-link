@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { formatChannel, formatGuild, formatMember, formatRole, resolveGuild, resolveMember } from '../discord.js';
+import { formatChannel, formatDiscordApiError, formatGuild, formatMember, formatRole, resolveGuild, resolveMember } from '../discord.js';
 
 export function registerGuildTools(server: McpServer) {
   // 1. get_server_info
@@ -25,7 +25,7 @@ export function registerGuildTools(server: McpServer) {
       } catch (err: any) {
         return {
           isError: true,
-          content: [{ type: 'text', text: `Error fetching server info: ${err.message}` }]
+          content: [{ type: 'text', text: formatDiscordApiError(err, 'get_server_info') }]
         };
       }
     }
@@ -63,7 +63,7 @@ export function registerGuildTools(server: McpServer) {
       } catch (err: any) {
         return {
           isError: true,
-          content: [{ type: 'text', text: `Error listing channels: ${err.message}` }]
+          content: [{ type: 'text', text: formatDiscordApiError(err, 'list_channels') }]
         };
       }
     }
@@ -95,7 +95,7 @@ export function registerGuildTools(server: McpServer) {
       } catch (err: any) {
         return {
           isError: true,
-          content: [{ type: 'text', text: `Error listing roles: ${err.message}` }]
+          content: [{ type: 'text', text: formatDiscordApiError(err, 'list_roles') }]
         };
       }
     }
@@ -138,7 +138,7 @@ export function registerGuildTools(server: McpServer) {
       } catch (err: any) {
         return {
           isError: true,
-          content: [{ type: 'text', text: `Error listing members: ${err.message}` }]
+          content: [{ type: 'text', text: formatDiscordApiError(err, 'list_members') }]
         };
       }
     }
@@ -167,7 +167,7 @@ export function registerGuildTools(server: McpServer) {
       } catch (err: any) {
         return {
           isError: true,
-          content: [{ type: 'text', text: `Error fetching member info: ${err.message}` }]
+          content: [{ type: 'text', text: formatDiscordApiError(err, 'get_member') }]
         };
       }
     }

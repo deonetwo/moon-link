@@ -21,7 +21,7 @@ export function registerMockTools(server: McpServer, config: AppConfig) {
                 service: 'Moon-Link Discord MCP Server (Test / Simulation Mode)',
                 greeting: `Hello ${client_name || 'Gemini Spark'}! MCP connection established successfully.`,
                 serverHost: 'AWS EC2 Ubuntu (18.142.95.204)',
-                transport: config.transport.toUpperCase(),
+                transport: (config.transport || 'sse').toUpperCase(),
                 mode: 'SIMULATION / SAFE TEST (Real Discord credentials not yet connected)',
                 timestamp: new Date().toISOString(),
                 instructions:

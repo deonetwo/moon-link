@@ -1,113 +1,125 @@
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
-import { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
-import { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import cors from 'cors';
 import express, { NextFunction, Request, Response } from 'express';
-import { AppConfig } from '../config.js';
+import rateLimit from 'express-rate-limit';
+import { AppConfig, timingSafeCompare } from '../config.js';
 import { getClient } from '../discord.js';
 import { createMcpServer } from '../server.js';
 
-/**
- * In-memory Direct HTTP Transport for stateless JSON-RPC POST requests
- * (e.g. Gemini Spark, OpenAPI clients, and HTTP-based MCP clients)
- */
-class DirectHttpTransport implements Transport {
-  onmessage?: (message: JSONRPCMessage) => void;
-  onclose?: () => void;
-  onerror?: (error: Error) => void;
-  private pendingResolvers = new Map<string | number, (msg: any) => void>();
-
-  async start(): Promise<void> {}
-  async close(): Promise<void> {}
-
-  async send(message: JSONRPCMessage): Promise<void> {
-    if ('id' in message && message.id !== undefined && message.id !== null) {
-      const resolver = this.pendingResolvers.get(message.id);
-      if (resolver) {
-        resolver(message);
-        this.pendingResolvers.delete(message.id);
-      }
-    }
-  }
-
-  async handleJsonRpc(reqMsg: any): Promise<any> {
-    if (!this.onmessage) {
-      throw new Error('Transport not ready');
-    }
-    if (reqMsg.id !== undefined && reqMsg.id !== null) {
-      return new Promise((resolve) => {
-        this.pendingResolvers.set(reqMsg.id, resolve);
-        this.onmessage!(reqMsg);
-      });
-    } else {
-      this.onmessage(reqMsg);
-      return null;
-    }
-  }
+interface ActiveSession {
+  sessionId: string;
+  transport: SSEServerTransport;
+  server: ReturnType<typeof createMcpServer>;
+  keepAliveTimer: NodeJS.Timeout;
+  createdAt: Date;
 }
 
 export async function runSseServer(config: AppConfig): Promise<void> {
   const app = express();
 
-  // Parse JSON and form bodies for OAuth2, REST, and Direct JSON-RPC requests
-  app.use(express.json());
+  // Trust Cloudflare reverse proxy headers
+  app.set('trust proxy', 1);
+
+  // Validate security configuration - zero hardcoded credentials
+  if (!config.authToken) {
+    throw new Error(
+      '[Security Configuration Error] MCP_AUTH_TOKEN must be set in process.env or .env. ' +
+      'Refusing to start unauthenticated remote MCP server.'
+    );
+  }
+
+  // Rate limiting to prevent brute-force token attacks and DoS
+  const limiter = rateLimit({
+    windowMs: 60 * 1000, // 1 minute window
+    max: 180, // Max 180 requests per minute per IP
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: {
+      error: 'Too Many Requests',
+      message: 'Rate limit exceeded. Please slow down your requests.'
+    }
+  });
+  app.use(limiter);
+
+  // Parse JSON payloads for POST messages (maximum payload 4MB)
+  app.use(
+    express.json({
+      limit: '4mb',
+      type: ['application/json', 'application/*+json', 'text/plain']
+    })
+  );
   app.use(express.urlencoded({ extended: true }));
 
-  // Full CORS middleware supporting any origin, headers, and methods for browser AI clients
+  // Comprehensive HTTP request logger with secret token masking
+  app.use((req, _res, next) => {
+    const rawUrl = req.originalUrl || req.url;
+    const sanitizedUrl = rawUrl.replace(/([?&]token=)([^&]+)/gi, (_match, prefix, val) => {
+      if (val.length <= 8) return `${prefix}***`;
+      return `${prefix}${val.slice(0, 4)}...${val.slice(-4)}`;
+    });
+    const rpcInfo = req.body?.method ? ` [JSON-RPC: ${req.body.method}]` : '';
+    console.error(`[HTTP-REQ] ${req.method} ${sanitizedUrl}${rpcInfo}`);
+    next();
+  });
+
+  // CORS configured with explicit allowed headers and methods
   app.use(
     cors({
       origin: '*',
-      methods: ['GET', 'POST', 'OPTIONS', 'HEAD'],
-      allowedHeaders: ['*'],
-      exposedHeaders: ['*']
+      methods: ['GET', 'POST', 'OPTIONS', 'HEAD', 'DELETE'],
+      allowedHeaders: [
+        'Content-Type',
+        'Authorization',
+        'X-Requested-With',
+        'Accept',
+        'X-Session-ID',
+        'mcp-session-id',
+        'Mcp-Session-Id'
+      ],
+      exposedHeaders: ['X-Session-ID', 'mcp-session-id', 'Mcp-Session-Id', 'Content-Type']
     })
   );
 
-  // Manual CORS preflight handling for maximum browser compatibility
-  app.use((req: Request, res: Response, next: NextFunction) => {
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD');
-    res.header('Access-Control-Allow-Headers', '*');
-    res.header('Access-Control-Expose-Headers', '*');
-    if (req.method === 'OPTIONS') {
-      res.status(200).end();
-      return;
+  // Normalize Accept header to ensure Streamable HTTP SDK compatibility
+  // (Prevents 406 Not Acceptable when clients omit text/event-stream)
+  app.use((req, _res, next) => {
+    if (
+      !req.headers.accept ||
+      !req.headers.accept.includes('text/event-stream') ||
+      !req.headers.accept.includes('application/json')
+    ) {
+      req.headers.accept = 'application/json, text/event-stream';
     }
     next();
   });
 
-  // Direct stateless HTTP transport instance
-  const directHttpTransport = new DirectHttpTransport();
-  const directServer = createMcpServer(config);
-  await directServer.connect(directHttpTransport);
+  // Active sessions registry: sessionId -> ActiveSession
+  const sessions = new Map<string, ActiveSession>();
 
-  // Store active SSE transports by sessionId
-  const transports = new Map<string, SSEServerTransport>();
+  // =========================================================================
+  // Security & Authentication Middleware
+  // =========================================================================
+  const authenticate = (req: Request, res: Response, next: NextFunction): void => {
+    let candidateToken: string | undefined;
 
-  // Token authentication middleware
-  const authMiddleware = (req: Request, res: Response, next: NextFunction) => {
+    // 1. Extract from HTTP Authorization header (Bearer <TOKEN>)
     const authHeader = req.headers.authorization;
-    let token: string | undefined;
-
     if (authHeader && authHeader.startsWith('Bearer ')) {
-      token = authHeader.substring(7).trim();
-    } else if (req.query.token && typeof req.query.token === 'string') {
-      token = req.query.token;
+      candidateToken = authHeader.substring(7).trim();
     }
 
-    // Accept OAuth access token or configured token
-    if (token === 'moon_link_access_token' || token === 'moon_link_test_token') {
-      return next();
+    // 2. Fallback to URL query parameter (?token=<TOKEN>)
+    if (!candidateToken && req.query.token && typeof req.query.token === 'string') {
+      candidateToken = req.query.token.trim();
     }
 
-    if (!config.authToken) {
-      return next();
-    }
-
-    if (!token || token !== config.authToken) {
+    // 3. Constant-time timing-safe validation against configured environment token
+    if (!candidateToken || !timingSafeCompare(candidateToken, config.authToken)) {
       res.status(401).json({
         error: 'Unauthorized',
-        message: 'Valid Bearer token required in Authorization header or token query parameter.'
+        message:
+          'Invalid or missing authentication token. Provide via Authorization: Bearer <TOKEN> header or ?token=<TOKEN> query parameter.'
       });
       return;
     }
@@ -115,13 +127,14 @@ export async function runSseServer(config: AppConfig): Promise<void> {
     next();
   };
 
-  // Helper to extract base URL
-  const getFullBase = (req: Request) => {
+  // Helper to extract absolute URL base (handles Cloudflare Tunnel, Nginx, or direct)
+  const resolveBaseUrl = (req: Request): string => {
     const host = req.headers['x-forwarded-host'] || req.headers.host || `${config.host}:${config.port}`;
     let proto = req.headers['x-forwarded-proto'] || (req.socket && (req.socket as any).encrypted ? 'https' : 'http');
+    // If proxied over Cloudflare Tunnel or standard SSL reverse proxy
     if (
       typeof host === 'string' &&
-      (host.includes('.lhr.life') || host.includes('.trycloudflare.com') || host.includes('.loca.lt') || host.includes('.ngrok'))
+      (host.includes('trycloudflare.com') || host.includes('lhr.life') || req.headers['cf-ray'])
     ) {
       proto = 'https';
     }
@@ -129,406 +142,320 @@ export async function runSseServer(config: AppConfig): Promise<void> {
   };
 
   // =========================================================================
-  // OAuth2 Endpoints (For Gemini Spark / Web AI Custom App Integration)
+  // Reachability Probes (Instant HTTP HEAD response for any route)
   // =========================================================================
-
-  const handleToken = (req: Request, res: Response) => {
-    const fullBase = getFullBase(req);
-    console.error(`[OAuth2] Token request received from: ${req.headers.origin || 'direct'}`);
-
-    let clientId = req.body.client_id || req.query.client_id;
-    let clientSecret = req.body.client_secret || req.query.client_secret;
-
-    const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith('Basic ')) {
-      try {
-        const decoded = Buffer.from(authHeader.substring(6), 'base64').toString('utf-8');
-        const [u, p] = decoded.split(':');
-        clientId = clientId || u;
-        clientSecret = clientSecret || p;
-      } catch {
-        // ignore parse error
-      }
-    }
-
-    console.error(`[OAuth2] Validating client: "${clientId}"`);
-
-    // Grant token
-    res.json({
-      access_token: 'moon_link_access_token',
-      token_type: 'Bearer',
-      expires_in: 86400,
-      scope: 'read write admin',
-      server_url: `${fullBase}/sse`
-    });
-    console.error('[OAuth2] Token granted successfully.');
-  };
-
-  app.post('/oauth/token', handleToken);
-  app.post('/token', handleToken);
-
-  const handleAuthorize = (req: Request, res: Response) => {
-    const redirectUri = req.query.redirect_uri as string;
-    const state = req.query.state as string;
-    const code = 'moon_link_auth_code';
-
-    console.error(`[OAuth2] Authorize request. Redirecting to: ${redirectUri}`);
-
-    if (redirectUri) {
-      const url = new URL(redirectUri);
-      url.searchParams.set('code', code);
-      if (state) url.searchParams.set('state', state);
-      res.redirect(url.toString());
-      return;
-    }
-
-    res.json({
-      status: 'authorized',
-      code,
-      state: state || null,
-      message: 'Authorization approved for Moon-Link Discord MCP Server'
-    });
-  };
-
-  app.get('/oauth/authorize', handleAuthorize);
-  app.get('/authorize', handleAuthorize);
-
-  const handleDiscovery = (req: Request, res: Response) => {
-    const fullBase = getFullBase(req);
-    res.json({
-      issuer: fullBase,
-      authorization_endpoint: `${fullBase}/oauth/authorize`,
-      token_endpoint: `${fullBase}/oauth/token`,
-      token_endpoint_auth_methods_supported: ['client_secret_post', 'client_secret_basic'],
-      response_types_supported: ['code', 'token'],
-      grant_types_supported: ['authorization_code', 'client_credentials'],
-      scopes_supported: ['read', 'write', 'admin']
-    });
-  };
-
-  app.get('/.well-known/oauth-authorization-server', handleDiscovery);
-  app.get('/.well-known/openid-configuration', handleDiscovery);
-
-  const handleManifest = (req: Request, res: Response) => {
-    const fullBase = getFullBase(req);
-    res.json({
-      schema_version: 'v1',
-      name_for_human: 'Moon-Link Discord MCP',
-      name_for_model: 'moon_link_discord',
-      description_for_human: 'Manage and inspect your Discord server directly from AI',
-      description_for_model: 'Tools to manage and inspect Discord channels, messages, roles, and members',
-      auth: {
-        type: 'oauth',
-        client_url: `${fullBase}/oauth/authorize`,
-        authorization_url: `${fullBase}/oauth/token`,
-        scope: 'read write admin',
-        authorization_content_type: 'application/x-www-form-urlencoded'
-      },
-      api: {
-        type: 'openapi',
-        url: `${fullBase}/openapi.json`
-      },
-      logo_url: `${fullBase}/logo.png`,
-      contact_email: 'support@moon-link.local',
-      legal_info_url: `${fullBase}/`
-    });
-  };
-
-  app.get('/manifest.json', handleManifest);
-  app.get('/.well-known/ai-plugin.json', handleManifest);
-
-  app.get('/openapi.json', (req: Request, res: Response) => {
-    const fullBase = getFullBase(req);
-    res.json({
-      openapi: '3.0.0',
-      info: {
-        title: 'Moon-Link Discord MCP API',
-        description: 'OpenAPI interface for Discord server management tools',
-        version: '1.0.0'
-      },
-      servers: [{ url: fullBase }],
-      paths: {
-        '/test_connection': {
-          get: {
-            summary: 'Test connection with MCP server',
-            operationId: 'testConnection',
-            responses: { '200': { description: 'Connection status' } }
-          }
-        },
-        '/get_server_info': {
-          get: {
-            summary: 'Get Discord server overview',
-            operationId: 'getServerInfo',
-            responses: { '200': { description: 'Server metrics' } }
-          }
-        },
-        '/list_channels': {
-          get: {
-            summary: 'List Discord channels',
-            operationId: 'listChannels',
-            responses: { '200': { description: 'List of channels' } }
-          }
-        },
-        '/send_message': {
-          post: {
-            summary: 'Send message to Discord channel',
-            operationId: 'sendMessage',
-            requestBody: {
-              content: {
-                'application/json': {
-                  schema: {
-                    type: 'object',
-                    properties: {
-                      channel_id: { type: 'string' },
-                      content: { type: 'string' }
-                    },
-                    required: ['channel_id', 'content']
-                  }
-                }
-              }
-            },
-            responses: { '200': { description: 'Sent confirmation' } }
-          }
-        }
-      }
-    });
-  });
-
-  // =========================================================================
-  // MCP SSE Endpoints
-  // =========================================================================
-
-  const handleSseConnection = async (req: Request, res: Response) => {
-    try {
-      const fullBase = getFullBase(req);
-
-      console.error(`[SSE] Incoming connection from: ${req.headers.origin || 'direct/cloud'}`);
-      console.error(`[SSE] Base URL: ${fullBase}`);
-
-      // Ensure reverse proxies DO NOT buffer SSE chunks
-      res.setHeader('X-Accel-Buffering', 'no');
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (req.method === 'HEAD') {
+      res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache, no-transform');
       res.setHeader('Connection', 'keep-alive');
-      res.setHeader('Content-Type', 'text/event-stream');
-
-      // Hook writeHead to inject anti-buffering headers
-      const originalWriteHead = res.writeHead.bind(res);
-      res.writeHead = function (statusCode: number, ...args: any[]): any {
-        for (let i = 0; i < args.length; i++) {
-          if (typeof args[i] === 'object' && args[i] !== null) {
-            args[i]['X-Accel-Buffering'] = 'no';
-            args[i]['Cache-Control'] = 'no-cache, no-transform';
-            args[i]['Connection'] = 'keep-alive';
-          }
-        }
-        res.setHeader('X-Accel-Buffering', 'no');
-        const ret = originalWriteHead(statusCode, ...args);
-        res.flushHeaders?.();
-        return ret;
-      };
-
-      // Hook write to rewrite relative endpoint to full absolute URL
-      const originalWrite = res.write.bind(res);
-      res.write = function (chunk: any, encoding?: any, cb?: any): boolean {
-        if (typeof chunk === 'string' && chunk.startsWith('event: endpoint\ndata: ')) {
-          chunk = chunk.replace('data: /', `data: ${fullBase}/`);
-          console.error(`[SSE] Sent absolute endpoint URL to client: ${chunk.trim()}`);
-        }
-        const ret = originalWrite(chunk, encoding, cb);
-        (res as any).flush?.();
-        return ret;
-      };
-
-      const transport = new SSEServerTransport('/message', res);
-      const sessionId = transport.sessionId;
-      transports.set(sessionId, transport);
-
-      const server = createMcpServer(config);
-      await server.connect(transport);
-
-      // Immediately send 4KB comment padding to force reverse proxy buffers to flush
-      res.write(': ' + 'flush-buffer-'.repeat(350) + '\n\n');
-      (res as any).flush?.();
-
-      // Keep connection alive through proxies
-      const pingInterval = setInterval(() => {
-        try {
-          res.write(': ping\n\n');
-        } catch {
-          clearInterval(pingInterval);
-        }
-      }, 15000);
-
-      const cleanupSession = () => {
-        clearInterval(pingInterval);
-        console.error(`[SSE] Session ${sessionId} closed.`);
-        transports.delete(sessionId);
-      };
-
-      transport.onclose = cleanupSession;
-      res.on('close', cleanupSession);
-
-      console.error(`[SSE] Session established: ${sessionId}`);
-    } catch (err: any) {
-      console.error('[SSE] Error establishing SSE session:', err);
-      if (!res.headersSent) {
-        res.status(500).json({ error: 'Failed to establish SSE stream', details: err.message });
-      }
+      res.setHeader('X-Accel-Buffering', 'no');
+      res.status(200).end();
+      return;
     }
-  };
+    next();
+  });
 
-  // Root endpoint: handles both information, SSE, and app link detection
-  app.get('/', authMiddleware, (req: Request, res: Response) => {
-    const accept = req.headers.accept || '';
-    if (accept.includes('text/event-stream')) {
-      return handleSseConnection(req, res);
-    }
-
-    const fullBase = getFullBase(req);
+  // =========================================================================
+  // RFC 9470: OAuth 2.0 Protected Resource Metadata Discovery
+  // Unauthenticated per RFC 9470 so remote MCP clients (e.g. Gemini Spark) can probe
+  // =========================================================================
+  app.use('/.well-known/oauth-protected-resource', (req: Request, res: Response) => {
+    const baseUrl = resolveBaseUrl(req);
+    res.setHeader('Content-Type', 'application/json');
     res.json({
-      name: 'moon-link-discord',
-      version: '1.0.0',
-      protocolVersion: '2024-11-05',
-      status: 'running',
-      mode: config.mockMode ? 'simulation' : 'live',
-      serverInfo: {
-        name: 'moon-link-discord',
-        version: '1.0.0'
-      },
-      capabilities: {
-        tools: { listChanged: true },
-        resources: { subscribe: false, listChanged: true },
-        prompts: { listChanged: true }
-      },
-      app_link: fullBase,
-      oauth: {
-        client_id: config.clientId,
-        token_url: `${fullBase}/oauth/token`,
-        authorize_url: `${fullBase}/oauth/authorize`
-      },
-      endpoints: {
-        mcp: `${fullBase}/`,
-        sse: `${fullBase}/sse`,
-        messages: `${fullBase}/message?sessionId=<session_id>`,
-        health: `${fullBase}/health`,
-        manifest: `${fullBase}/manifest.json`,
-        openapi: `${fullBase}/openapi.json`
-      }
+      resource: baseUrl,
+      authorization_servers: [],
+      bearer_methods_supported: ['header', 'query'],
+      resource_documentation: `${baseUrl}/`
     });
   });
 
-  // Dedicated SSE endpoint
-  app.get('/sse', authMiddleware, handleSseConnection);
-  app.get('/mcp', authMiddleware, handleSseConnection);
-
-  // Health check endpoint
+  // =========================================================================
+  // Health & Diagnostic Endpoint (Unauthenticated for Tunnel & Cloud Probes)
+  // =========================================================================
   app.get('/health', (_req: Request, res: Response) => {
     try {
-      if (config.mockMode) {
-        res.json({
-          status: 'healthy',
-          mode: 'SIMULATION / TEST (Mock Mode)',
-          uptimeSeconds: Math.floor(process.uptime()),
-          bot: {
-            ready: true,
-            user: 'MoonLinkMockBot#0001 (Simulated)',
-            guildsCount: 1
-          }
-        });
-        return;
-      }
-
       const client = getClient();
       res.json({
         status: 'healthy',
+        activeSessions: sessions.size,
         uptimeSeconds: Math.floor(process.uptime()),
-        bot: {
+        discord: {
           ready: client.isReady(),
-          user: client.user ? client.user.tag : null,
+          user: client.user?.tag || null,
           guildsCount: client.guilds.cache.size
         }
       });
     } catch (err: any) {
       res.status(503).json({
         status: 'unhealthy',
+        activeSessions: sessions.size,
+        uptimeSeconds: Math.floor(process.uptime()),
         error: err.message
       });
     }
   });
 
-  // Shared POST message handler
-  const handlePostMessage = async (req: Request, res: Response) => {
-    // 1. Direct JSON-RPC POST (Stateless / Streamable HTTP MCP)
-    if (req.body && (req.body.jsonrpc === '2.0' || req.body.method)) {
-      console.error(`[MCP-HTTP] Direct JSON-RPC request: method="${req.body.method}", id=${req.body.id}`);
-      try {
-        const result = await directHttpTransport.handleJsonRpc(req.body);
-        if (result) {
-          console.error(`[MCP-HTTP] Sent response for method="${req.body.method}", id=${req.body.id}`);
-          res.json(result);
-        } else {
-          res.status(204).end();
-        }
-        return;
-      } catch (err: any) {
-        console.error(`[MCP-HTTP] Error processing JSON-RPC:`, err);
-        res.status(500).json({ jsonrpc: '2.0', id: req.body?.id || null, error: { code: -32603, message: err.message } });
-        return;
+  // =========================================================================
+  // MCP Remote SSE Transport Handler (GET /sse and GET /mcp)
+  // =========================================================================
+  const handleSseConnection = async (req: Request, res: Response): Promise<void> => {
+    const baseUrl = resolveBaseUrl(req);
+
+    // 1. Cloudflare Tunnel & Reverse Proxy Anti-Buffering Headers
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+
+    // Handle HTTP HEAD probe requests immediately
+    if (req.method === 'HEAD') {
+      res.status(200).end();
+      return;
+    }
+
+    // Hook write to rewrite relative endpoint event into absolute URL
+    // Guarantees remote clients (e.g. web-based Spark) post back to the tunnel with auth token
+    const originalWrite = res.write.bind(res);
+    res.write = function (chunk: any, encoding?: any, cb?: any): boolean {
+      let str = typeof chunk === 'string' ? chunk : Buffer.isBuffer(chunk) ? chunk.toString('utf8') : '';
+      if (str && str.includes('event: endpoint\ndata: ')) {
+        const tokenQuery = req.query.token ? `token=${encodeURIComponent(String(req.query.token))}&` : '';
+        str = str.replace(/data:\s*\/messages\?/, `data: ${baseUrl}/messages?${tokenQuery}`);
+        str = str.replace(/data:\s*\/message\?/, `data: ${baseUrl}/message?${tokenQuery}`);
+        chunk = typeof chunk === 'string' ? str : Buffer.from(str, 'utf8');
       }
-    }
+      return originalWrite(chunk, encoding, cb);
+    };
 
-    // 2. Session-based SSE POST
-    let sessionId = (req.query.sessionId as string) || (req.headers['x-session-id'] as string);
+    // Instantiate official MCP SDK SSE Transport
+    const transport = new SSEServerTransport('/messages', res);
+    const sessionId = transport.sessionId;
 
-    if (!sessionId && transports.size === 1) {
-      sessionId = Array.from(transports.keys())[0];
-      console.error(`[HTTP] No sessionId in request, using single active session: ${sessionId}`);
-    }
+    const server = createMcpServer(config);
 
-    console.error(`[HTTP] POST message received. SessionId: "${sessionId || '(none)'}"`);
+    // 2. Active Heartbeat / Keep-Alive mechanism (every 15s)
+    // Prevents Cloudflare Tunnel HTTP 524 Idle Timeout
+    const keepAliveTimer = setInterval(() => {
+      if (!res.writableEnded && !res.destroyed) {
+        try {
+          res.write(': keep-alive\n\n');
+        } catch (writeErr) {
+          console.error(`[SSE] Heartbeat failed for session ${sessionId}:`, writeErr);
+          disposeSession('heartbeat_failure');
+        }
+      }
+    }, 15000);
 
-    if (!sessionId) {
-      res.status(400).json({ error: 'Missing "sessionId" query parameter' });
-      return;
-    }
+    // Register active session
+    const sessionObj: ActiveSession = {
+      sessionId,
+      transport,
+      server,
+      keepAliveTimer,
+      createdAt: new Date()
+    };
+    sessions.set(sessionId, sessionObj);
+    console.error(`[SSE] Session initialized: ${sessionId} (Active: ${sessions.size})`);
 
-    const transport = transports.get(sessionId);
-    if (!transport) {
-      console.error(`[HTTP] Error: Session "${sessionId}" not found. Active sessions: [${Array.from(transports.keys()).join(', ')}]`);
-      res.status(404).json({ error: `SSE session "${sessionId}" not found or already closed` });
-      return;
-    }
+    // 3. Clean Session Lifecycle Management
+    let isDisposed = false;
+    const disposeSession = async (reason: string) => {
+      if (isDisposed) return;
+      isDisposed = true;
+
+      clearInterval(keepAliveTimer);
+      sessions.delete(sessionId);
+
+      try {
+        await server.close();
+      } catch (closeErr) {
+        // safe server close
+      }
+
+      console.error(`[SSE] Session disposed: ${sessionId} [Reason: ${reason}] (Remaining: ${sessions.size})`);
+    };
+
+    req.on('close', () => disposeSession('req.close'));
+    req.on('aborted', () => disposeSession('req.aborted'));
+    res.on('close', () => disposeSession('res.close'));
+    transport.onclose = () => disposeSession('transport.onclose');
 
     try {
-      await transport.handlePostMessage(req, res, req.body);
-      console.error(`[HTTP] Successfully handled message for session: ${sessionId}`);
+      await server.connect(transport);
+      res.write(': initial-flush\n\n');
     } catch (err: any) {
-      console.error(`[HTTP] Error processing message for session ${sessionId}:`, err);
+      console.error(`[SSE] Error connecting MCP server for session ${sessionId}:`, err);
+      await disposeSession('connect_error');
       if (!res.headersSent) {
-        res.status(500).json({ error: 'Failed to process message', details: err.message });
+        res.status(500).json({ error: 'Failed to establish SSE stream', details: err.message });
       }
     }
   };
 
-  // Route POST messages across potential endpoints
-  app.post('/message', authMiddleware, handlePostMessage);
-  app.post('/sse', authMiddleware, handlePostMessage);
-  app.post('/', (req: Request, res: Response, next: NextFunction) => {
-    // If it has sessionId or is JSON-RPC, handle as MCP message
-    if (req.query.sessionId || req.headers['x-session-id'] || req.body?.jsonrpc || req.body?.method) {
-      return handlePostMessage(req, res);
+  // =========================================================================
+  // MCP JSON-RPC Message Ingestion (Hybrid SSE + Streamable HTTP)
+  // Supports both stateful SSE sessions and direct Streamable HTTP JSON-RPC
+  // =========================================================================
+  const handleIncomingMessage = async (req: Request, res: Response): Promise<void> => {
+    let sessionId =
+      (req.query.sessionId as string) ||
+      (req.headers['x-session-id'] as string) ||
+      (req.headers['mcp-session-id'] as string);
+
+    // 1. Direct match with an active SSE session
+    if (sessionId && sessions.has(sessionId)) {
+      const session = sessions.get(sessionId)!;
+      try {
+        await session.transport.handlePostMessage(req, res, req.body);
+      } catch (err: any) {
+        console.error(`[MCP-SSE] Error handling POST message for session ${sessionId}:`, err);
+        if (!res.headersSent) {
+          res.status(500).json({
+            error: 'Internal Server Error',
+            message: 'Failed to process SSE JSON-RPC message.',
+            details: err.message
+          });
+        }
+      }
+      return;
     }
-    // If grant_type present, route to token handler
-    if (req.body?.grant_type || req.query?.grant_type) {
-      return handleToken(req, res);
+
+    // 2. Single active SSE session fallback if sessionId omitted by client
+    if (!sessionId && sessions.size === 1) {
+      const singleSession = Array.from(sessions.values())[0];
+      try {
+        await singleSession.transport.handlePostMessage(req, res, req.body);
+      } catch (err: any) {
+        console.error(
+          `[MCP-SSE] Error handling POST message for single session ${singleSession.sessionId}:`,
+          err
+        );
+        if (!res.headersSent) {
+          res.status(500).json({
+            error: 'Internal Server Error',
+            message: 'Failed to process SSE JSON-RPC message.',
+            details: err.message
+          });
+        }
+      }
+      return;
     }
-    return handlePostMessage(req, res);
+
+    // 3. Stateless / Streamable HTTP JSON-RPC Mode
+    // Handles clients that POST directly (e.g. Gemini Spark initialize and tools queries)
+    const isJsonRpc =
+      req.body &&
+      typeof req.body === 'object' &&
+      ('jsonrpc' in req.body || 'method' in req.body || Array.isArray(req.body));
+
+    if (isJsonRpc) {
+      try {
+        const streamableTransport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: undefined,
+          enableJsonResponse: true
+        });
+        const server = createMcpServer(config);
+        await server.connect(streamableTransport);
+        await streamableTransport.handleRequest(req, res, req.body);
+
+        res.on('finish', () => {
+          setImmediate(async () => {
+            try {
+              await streamableTransport.close();
+            } catch {}
+            try {
+              await server.close();
+            } catch {}
+          });
+        });
+        return;
+      } catch (err: any) {
+        console.error(`[MCP-Streamable] Error processing JSON-RPC request:`, err);
+        if (!res.headersSent) {
+          res.status(500).json({
+            jsonrpc: '2.0',
+            error: {
+              code: -32603,
+              message: 'Internal error processing MCP JSON-RPC message',
+              data: err.message
+            },
+            id: req.body?.id ?? null
+          });
+        }
+        return;
+      }
+    }
+
+    // 4. Invalid or unrecognized request
+    res.status(400).json({
+      error: 'Bad Request',
+      message:
+        'Missing valid JSON-RPC payload or unrecognized session ID. ' +
+        'Send standard JSON-RPC 2.0 requests (e.g. initialize) or establish an SSE stream via GET /sse.'
+    });
+  };
+
+  // Route GET endpoints for SSE streaming
+  app.get('/sse', authenticate, handleSseConnection);
+  app.get('/mcp', authenticate, handleSseConnection);
+
+  // Root endpoint: Serves SSE if stream requested, otherwise JSON discovery
+  app.get('/', (req: Request, res: Response) => {
+    const accept = req.headers.accept || '';
+    if (accept.includes('text/event-stream')) {
+      return authenticate(req, res, () => handleSseConnection(req, res));
+    }
+    res.json({
+      name: 'moon-link-discord',
+      version: '1.0.0',
+      status: 'running',
+      protocolVersion: '2024-11-05',
+      endpoints: {
+        sse: '/sse',
+        messages: '/messages',
+        health: '/health'
+      }
+    });
   });
 
-  // Start HTTP listener
+  // Route POST endpoints for JSON-RPC messages (handles all standard MCP paths)
+  app.post('/messages', authenticate, handleIncomingMessage);
+  app.post('/message', authenticate, handleIncomingMessage);
+  app.post('/sse', authenticate, handleIncomingMessage);
+  app.post('/mcp', authenticate, handleIncomingMessage);
+  app.post('/', (req: Request, res: Response, next: NextFunction) => {
+    if (
+      req.query.sessionId ||
+      req.headers['x-session-id'] ||
+      req.headers['mcp-session-id'] ||
+      req.body?.jsonrpc ||
+      req.body?.method
+    ) {
+      return authenticate(req, res, () => handleIncomingMessage(req, res));
+    }
+    next();
+  });
+
+  // Session termination endpoints (Streamable HTTP spec)
+  app.delete('/mcp', authenticate, (_req: Request, res: Response) => {
+    res.status(200).json({ jsonrpc: '2.0', result: null, id: null });
+  });
+  app.delete('/sse', authenticate, (_req: Request, res: Response) => {
+    res.status(200).json({ jsonrpc: '2.0', result: null, id: null });
+  });
+
+  // Start HTTP Listener
   app.listen(config.port, config.host, () => {
-    console.error(`[MCP] Moon-Link Discord MCP Server listening on http://${config.host}:${config.port}`);
-    console.error(`[MCP] SSE endpoint: http://${config.host}:${config.port}/sse`);
-    console.error(`[MCP] OAuth Client ID: ${config.clientId}`);
+    console.error(`=============================================================`);
+    console.error(`  MOON-LINK REMOTE MCP SERVER (HYBRID SSE + STREAMABLE HTTP) `);
+    console.error(`=============================================================`);
+    console.error(`  Listening on: http://${config.host}:${config.port}`);
+    console.error(`  SSE Stream:   http://${config.host}:${config.port}/sse`);
+    console.error(`  Messages:     http://${config.host}:${config.port}/messages`);
+    console.error(`  Health Check: http://${config.host}:${config.port}/health`);
+    console.error(`  Auth Mode:    BEARER TOKEN / ?token= (Enforced)`);
+    console.error(`=============================================================`);
   });
 }

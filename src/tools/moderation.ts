@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { PermissionFlagsBits } from 'discord.js';
 import { z } from 'zod';
 import { AppConfig } from '../config.js';
-import { getBotMember, resolveGuild, resolveMember } from '../discord.js';
+import { formatDiscordApiError, getBotMember, resolveGuild, resolveMember } from '../discord.js';
 import {
   enforceConfirmation,
   validateBotPermissions,
@@ -44,7 +44,7 @@ export function registerModerationTools(server: McpServer, config: AppConfig) {
       } catch (err: any) {
         return {
           isError: true,
-          content: [{ type: 'text', text: `Error timing out member: ${err.message}` }]
+          content: [{ type: 'text', text: formatDiscordApiError(err, 'timeout_member') }]
         };
       }
     }
@@ -80,7 +80,7 @@ export function registerModerationTools(server: McpServer, config: AppConfig) {
       } catch (err: any) {
         return {
           isError: true,
-          content: [{ type: 'text', text: `Error removing timeout: ${err.message}` }]
+          content: [{ type: 'text', text: formatDiscordApiError(err, 'remove_timeout') }]
         };
       }
     }
@@ -121,7 +121,7 @@ export function registerModerationTools(server: McpServer, config: AppConfig) {
       } catch (err: any) {
         return {
           isError: true,
-          content: [{ type: 'text', text: `Error kicking member: ${err.message}` }]
+          content: [{ type: 'text', text: formatDiscordApiError(err, 'kick_member') }]
         };
       }
     }
@@ -170,7 +170,7 @@ export function registerModerationTools(server: McpServer, config: AppConfig) {
       } catch (err: any) {
         return {
           isError: true,
-          content: [{ type: 'text', text: `Error banning user: ${err.message}` }]
+          content: [{ type: 'text', text: formatDiscordApiError(err, 'ban_member') }]
         };
       }
     }
@@ -204,7 +204,7 @@ export function registerModerationTools(server: McpServer, config: AppConfig) {
       } catch (err: any) {
         return {
           isError: true,
-          content: [{ type: 'text', text: `Error unbanning user: ${err.message}` }]
+          content: [{ type: 'text', text: formatDiscordApiError(err, 'unban_member') }]
         };
       }
     }
@@ -245,7 +245,7 @@ export function registerModerationTools(server: McpServer, config: AppConfig) {
       } catch (err: any) {
         return {
           isError: true,
-          content: [{ type: 'text', text: `Error listing bans: ${err.message}` }]
+          content: [{ type: 'text', text: formatDiscordApiError(err, 'list_bans') }]
         };
       }
     }

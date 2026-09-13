@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Collection, ColorResolvable, EmbedBuilder, Message, PermissionFlagsBits } from 'discord.js';
 import { z } from 'zod';
 import { AppConfig } from '../config.js';
-import { formatMessage, getBotMember, resolveGuild, resolveTextChannel } from '../discord.js';
+import { formatDiscordApiError, formatMessage, getBotMember, resolveGuild, resolveTextChannel } from '../discord.js';
 import { enforceConfirmation, validateBotPermissions, validateSnowflake } from '../security.js';
 
 export function registerMessageTools(server: McpServer, config: AppConfig) {
@@ -86,7 +86,7 @@ export function registerMessageTools(server: McpServer, config: AppConfig) {
       } catch (err: any) {
         return {
           isError: true,
-          content: [{ type: 'text', text: `Error sending message: ${err.message}` }]
+          content: [{ type: 'text', text: formatDiscordApiError(err, 'send_message') }]
         };
       }
     }
@@ -136,7 +136,7 @@ export function registerMessageTools(server: McpServer, config: AppConfig) {
       } catch (err: any) {
         return {
           isError: true,
-          content: [{ type: 'text', text: `Error reading channel messages: ${err.message}` }]
+          content: [{ type: 'text', text: formatDiscordApiError(err, 'read_channel_messages') }]
         };
       }
     }
@@ -180,7 +180,7 @@ export function registerMessageTools(server: McpServer, config: AppConfig) {
       } catch (err: any) {
         return {
           isError: true,
-          content: [{ type: 'text', text: `Error deleting message: ${err.message}` }]
+          content: [{ type: 'text', text: formatDiscordApiError(err, 'delete_message') }]
         };
       }
     }
@@ -221,7 +221,7 @@ export function registerMessageTools(server: McpServer, config: AppConfig) {
       } catch (err: any) {
         return {
           isError: true,
-          content: [{ type: 'text', text: `Error purging messages: ${err.message}` }]
+          content: [{ type: 'text', text: formatDiscordApiError(err, 'purge_messages') }]
         };
       }
     }
@@ -263,7 +263,7 @@ export function registerMessageTools(server: McpServer, config: AppConfig) {
       } catch (err: any) {
         return {
           isError: true,
-          content: [{ type: 'text', text: `Error adding reaction: ${err.message}` }]
+          content: [{ type: 'text', text: formatDiscordApiError(err, 'add_reaction') }]
         };
       }
     }
@@ -315,7 +315,7 @@ export function registerMessageTools(server: McpServer, config: AppConfig) {
       } catch (err: any) {
         return {
           isError: true,
-          content: [{ type: 'text', text: `Error creating thread: ${err.message}` }]
+          content: [{ type: 'text', text: formatDiscordApiError(err, 'create_thread') }]
         };
       }
     }
