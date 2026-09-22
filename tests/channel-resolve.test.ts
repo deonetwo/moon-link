@@ -43,21 +43,28 @@ async function runChannelResolutionTests() {
   assert.strictEqual(ch5.id, '1550706214629806221');
   console.log('✅ Resolved channel by mention syntax:', ch5.name);
 
-  // Test 6: Helpful error message when channel (e.g. mainframe-channel) is not found
-  console.log('\nTest 6: Missing channel error message');
+  // Test 6: Resolve newly created mainframe-channel by name
+  console.log('\nTest 6: Resolve "mainframe-channel" by name');
+  const ch6 = await resolveChannel('mainframe-channel');
+  assert.strictEqual(ch6.name, 'mainframe-channel');
+  console.log('✅ Resolved newly created channel:', ch6.name, `(${ch6.id})`);
+
+  // Test 7: Helpful error message when channel is not found
+  console.log('\nTest 7: Missing channel error message');
   let threw = false;
   try {
-    await resolveChannel('mainframe-channel');
+    await resolveChannel('non-existent-channel-xyz');
   } catch (err: any) {
     threw = true;
     assert.ok(err.message.includes('not found in server'), 'Should indicate channel was not found');
     assert.ok(err.message.includes('Available text channels:'), 'Should list available text channels');
+    assert.ok(err.message.includes('#mainframe-channel'), 'Available channels should list #mainframe-channel');
     console.log('✅ Received expected descriptive error:\n   ', err.message);
   }
   assert.strictEqual(threw, true, 'Should have thrown for nonexistent channel');
 
   console.log('\n=====================================================');
-  console.log('🎉 ALL CHANNEL RESOLUTION TESTS PASSED (6/6)');
+  console.log('🎉 ALL CHANNEL RESOLUTION TESTS PASSED (7/7)');
   console.log('=====================================================\n');
   process.exit(0);
 }
