@@ -105,7 +105,7 @@ export function registerMockTools(server: McpServer, config: AppConfig) {
     'send_message',
     '[TEST MODE] Simulate sending a message to a Discord channel',
     {
-      channel_id: z.string().describe('Target Channel ID'),
+      channel_id: z.string().describe('Target Channel Name or ID'),
       content: z.string().optional().describe('Message text content')
     },
     async ({ channel_id, content }) => {
@@ -125,7 +125,7 @@ export function registerMockTools(server: McpServer, config: AppConfig) {
     'read_channel_messages',
     '[TEST MODE] Read simulated recent messages from a channel',
     {
-      channel_id: z.string().describe('Channel ID'),
+      channel_id: z.string().describe('Channel Name or ID (e.g. "mainframe-channel" or snowflake ID)'),
       limit: z.number().optional().default(10)
     },
     async ({ channel_id }) => {

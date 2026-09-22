@@ -11,7 +11,7 @@ export function registerAuditTools(server: McpServer, _config: AppConfig) {
     'create_invite',
     'Create an invite link for a Discord channel',
     {
-      channel_id: z.string().describe('Channel ID to create the invite for'),
+      channel_id: z.string().describe('Channel Name or ID to create the invite for'),
       max_age_seconds: z.number().int().min(0).max(604800).optional().describe('Invite duration in seconds (0 = never, max 604800 = 7 days, default 86400 = 24h)'),
       max_uses: z.number().int().min(0).max(100).optional().describe('Max uses (0 = unlimited, default: 0)'),
       unique: z.boolean().optional().describe('Ensure unique invite code (default: true)'),

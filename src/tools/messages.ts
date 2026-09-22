@@ -11,7 +11,7 @@ export function registerMessageTools(server: McpServer, config: AppConfig) {
     'send_message',
     'Send a message or embed to a Discord text or announcement channel',
     {
-      channel_id: z.string().describe('Target Discord Channel ID'),
+      channel_id: z.string().describe('Target Discord Channel Name (e.g. "mainframe-channel", "#general") or Snowflake ID'),
       content: z.string().max(2000).optional().describe('Text content of the message (max 2000 characters)'),
       reply_to_message_id: z.string().optional().describe('Optional Message ID to reply to'),
       guild_id: z.string().optional().describe('Discord Server ID'),
@@ -29,7 +29,7 @@ export function registerMessageTools(server: McpServer, config: AppConfig) {
                 inline: z.boolean().optional()
               })
             )
-            .optional(),
+              .optional(),
           footer: z.string().max(2048).optional()
         })
         .optional()
@@ -95,9 +95,9 @@ export function registerMessageTools(server: McpServer, config: AppConfig) {
   // 2. read_channel_messages
   server.tool(
     'read_channel_messages',
-    'Read recent messages from a channel (supports limit, before/after filters)',
+    'Read recent messages from a channel (supports limit, before/after filters, channel name or ID)',
     {
-      channel_id: z.string().describe('Channel ID to fetch messages from'),
+      channel_id: z.string().describe('Channel Name (e.g. "mainframe-channel", "#general") or Snowflake ID to fetch messages from'),
       limit: z.number().int().min(1).max(100).optional().describe('Number of messages to retrieve (1-100, default: 25)'),
       before_message_id: z.string().optional().describe('Fetch messages sent before this Message ID'),
       after_message_id: z.string().optional().describe('Fetch messages sent after this Message ID'),
@@ -147,7 +147,7 @@ export function registerMessageTools(server: McpServer, config: AppConfig) {
     'delete_message',
     'Delete a specific message from a channel',
     {
-      channel_id: z.string().describe('Channel ID where the message is located'),
+      channel_id: z.string().describe('Channel Name or ID where the message is located'),
       message_id: z.string().describe('The ID of the message to delete'),
       reason: z.string().optional().describe('Reason for deletion (visible in audit log)'),
       guild_id: z.string().optional().describe('Discord Server ID')
@@ -191,7 +191,7 @@ export function registerMessageTools(server: McpServer, config: AppConfig) {
     'purge_messages',
     'Bulk delete up to 100 recent messages in a channel (messages older than 14 days cannot be bulk deleted). Requires confirm: true.',
     {
-      channel_id: z.string().describe('Target Channel ID'),
+      channel_id: z.string().describe('Target Channel Name or ID'),
       count: z.number().int().min(2).max(100).describe('Number of messages to purge (2-100)'),
       confirm: z.boolean().optional().describe('Confirmation flag. Must be true to execute destructive deletion'),
       guild_id: z.string().optional().describe('Discord Server ID')
@@ -232,7 +232,7 @@ export function registerMessageTools(server: McpServer, config: AppConfig) {
     'add_reaction',
     'Add an emoji reaction to a Discord message',
     {
-      channel_id: z.string().describe('Channel ID of the message'),
+      channel_id: z.string().describe('Channel Name or ID of the message'),
       message_id: z.string().describe('Message ID to react to'),
       emoji: z.string().describe('Emoji to add (e.g. "👍", "🔥", or custom emoji name/id)'),
       guild_id: z.string().optional().describe('Discord Server ID')
@@ -274,7 +274,7 @@ export function registerMessageTools(server: McpServer, config: AppConfig) {
     'create_thread',
     'Create a new thread in a text channel or from an existing message',
     {
-      channel_id: z.string().describe('Channel ID where thread will be created'),
+      channel_id: z.string().describe('Channel Name or ID where thread will be created'),
       name: z.string().min(1).max(100).describe('Name of the thread'),
       message_id: z.string().optional().describe('Optional Message ID to start thread from'),
       auto_archive_duration: z.enum(['60', '1440', '4320', '10080']).optional().describe('Auto-archive minutes (60, 1440=1d, 4320=3d, 10080=7d)'),

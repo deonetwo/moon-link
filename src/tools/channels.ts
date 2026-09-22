@@ -75,7 +75,7 @@ export function registerChannelTools(server: McpServer, config: AppConfig) {
     'modify_channel',
     'Modify properties of an existing channel (name, topic, category, slowmode, nsfw)',
     {
-      channel_id: z.string().describe('Channel ID to modify'),
+      channel_id: z.string().describe('Channel Name or ID to modify'),
       name: z.string().min(1).max(100).optional().describe('New channel name'),
       topic: z.string().max(1024).optional().describe('New channel topic'),
       parent_category_id: z.string().nullable().optional().describe('New Parent Category ID (or null to remove category)'),
@@ -132,7 +132,7 @@ export function registerChannelTools(server: McpServer, config: AppConfig) {
     'delete_channel',
     'Permanently delete a channel or category. Requires confirm: true.',
     {
-      channel_id: z.string().describe('Channel ID to delete'),
+      channel_id: z.string().describe('Channel Name or ID to delete'),
       confirm: z.boolean().optional().describe('Confirmation flag. Must be true to delete the channel'),
       reason: z.string().optional().describe('Reason for deletion in audit log'),
       guild_id: z.string().optional().describe('Discord Server ID')

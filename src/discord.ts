@@ -155,26 +155,110 @@ export async function getBotMember(guild: Guild): Promise<GuildMember> {
 }
 
 /**
- * Resolves a channel within a guild and validates ownership
+ * Resolves a channel within a guild by Snowflake ID or channel name.
+ * Accepts:
+ * - Snowflake ID (e.g. "1550706214629806221")
+ * - Mention syntax (e.g. "<#1550706214629806221>")
+ * - Channel name / slug (e.g. "mainframe-channel", "#mainframe-channel", "mainframe channel")
  */
-export async function resolveChannel(channelId: string, guildId?: string): Promise<GuildBasedChannel> {
-  const validChannelId = validateSnowflake(channelId, 'channelId');
+export async function resolveChannel(channelIdentifier: string, guildId?: string): Promise<GuildBasedChannel> {
+  if (!channelIdentifier || typeof channelIdentifier !== 'string' || !channelIdentifier.trim()) {
+    throw new Error('A valid channel ID or channel name must be provided.');
+  }
+
+  const raw = channelIdentifier.trim();
   const guild = await resolveGuild(guildId);
 
-  let channel = guild.channels.cache.get(validChannelId);
-  if (!channel) {
+  // 1. Check for Discord mention format: <#123456789012345678>
+  const mentionMatch = raw.match(/^<#(\d{17,20})>$/);
+  const candidateId = mentionMatch ? mentionMatch[1] : raw;
+
+  // 2. If it's a numeric snowflake ID, try fetching/getting by ID
+  const SNOWFLAKE_REGEX = /^\d{17,20}$/;
+  if (SNOWFLAKE_REGEX.test(candidateId)) {
+    const cached = guild.channels.cache.get(candidateId);
+    if (cached) return cached;
+
     try {
-      const fetched = await guild.channels.fetch(validChannelId);
-      if (!fetched) {
-        throw new Error(`Channel "${validChannelId}" not found in server "${guild.name}" (${guild.id}).`);
+      const fetched = await guild.channels.fetch(candidateId);
+      if (fetched) return fetched;
+    } catch (err: any) {
+      if (err.code !== 10003 && err.code !== 50001 && err.status !== 404) {
+        throw new Error(formatDiscordApiError(err, `fetch channel "${candidateId}"`));
       }
-      channel = fetched;
-    } catch (err) {
-      throw new Error(formatDiscordApiError(err, `fetch channel "${validChannelId}"`));
     }
   }
 
-  return channel;
+  // 3. Resolve by channel name
+  const cleanName = raw.startsWith('#') ? raw.slice(1).trim() : raw;
+  const targetLower = cleanName.toLowerCase();
+  const targetNormalized = targetLower.replace(/\s+/g, '-');
+  const targetStripped = targetLower.replace(/[-_ ]/g, '');
+
+  const findBestMatch = (channelList: GuildBasedChannel[]) => {
+    // Exact name match (case-insensitive)
+    let matches = channelList.filter(c => c.name.toLowerCase() === targetLower);
+
+    // Hyphenated match (e.g. "mainframe channel" -> "mainframe-channel")
+    if (matches.length === 0) {
+      matches = channelList.filter(c => c.name.toLowerCase() === targetNormalized);
+    }
+
+    // Stripped match (ignoring dashes, underscores, spaces)
+    if (matches.length === 0) {
+      matches = channelList.filter(c => c.name.toLowerCase().replace(/[-_ ]/g, '') === targetStripped);
+    }
+
+    // Stripped leading emoji / special characters match (e.g. "💬-mainframe" -> "mainframe")
+    if (matches.length === 0) {
+      matches = channelList.filter(c => {
+        const strippedPrefix = c.name.toLowerCase().replace(/^[^\w\d]+/, '');
+        return strippedPrefix === targetLower || strippedPrefix === targetNormalized;
+      });
+    }
+
+    // Substring / partial match if search term is at least 3 characters
+    if (matches.length === 0 && targetLower.length >= 3) {
+      matches = channelList.filter(c =>
+        c.name.toLowerCase().includes(targetNormalized) || targetNormalized.includes(c.name.toLowerCase())
+      );
+    }
+
+    if (matches.length === 0) return null;
+
+    // Prioritize text-based channels if multiple matches exist
+    const textMatch = matches.find(c => c.isTextBased());
+    return textMatch || matches[0];
+  };
+
+  // Check cache first
+  const cachedChannels = Array.from(guild.channels.cache.values()).filter(Boolean) as GuildBasedChannel[];
+  let matched = findBestMatch(cachedChannels);
+  if (matched) return matched;
+
+  // If not found in cache, fetch fresh list from Discord API
+  try {
+    const fetchedMap = await guild.channels.fetch();
+    const freshChannels = Array.from(fetchedMap.values()).filter(Boolean) as GuildBasedChannel[];
+    matched = findBestMatch(freshChannels);
+    if (matched) return matched;
+
+    const availableText = freshChannels
+      .filter(c => c.isTextBased())
+      .map(c => `#${c.name}`)
+      .slice(0, 15)
+      .join(', ');
+
+    throw new Error(
+      `Channel "${channelIdentifier}" not found in server "${guild.name}" (${guild.id}). ` +
+      `Available text channels: ${availableText || '(none)'}`
+    );
+  } catch (err: any) {
+    if (err.message.includes('not found in server')) {
+      throw err;
+    }
+    throw new Error(formatDiscordApiError(err, `fetch channels in guild "${guild.name}"`));
+  }
 }
 
 /**

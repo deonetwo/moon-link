@@ -1,6 +1,6 @@
 import { Client, GatewayIntentBits, PermissionFlagsBits } from 'discord.js';
 import dotenv from 'dotenv';
-import { maskToken } from '../src/config.js';
+import { maskSecret } from '../src/config.js';
 
 dotenv.config();
 
@@ -13,7 +13,7 @@ async function runDiagnostic() {
   const guildId = process.env.DISCORD_GUILD_ID;
   const allowedGuilds = process.env.ALLOWED_GUILD_IDS;
 
-  console.log(`[Config] Bot Token: ${maskToken(token)}`);
+  console.log(`[Config] Bot Token: ${maskSecret(token)}`);
   console.log(`[Config] Target Server ID: ${guildId || '(Not configured)'}`);
   console.log(`[Config] Allowed Server IDs: ${allowedGuilds || '(Inherits default)'}\n`);
 
