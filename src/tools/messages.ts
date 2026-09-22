@@ -142,18 +142,21 @@ export function registerMessageTools(server: McpServer, config: AppConfig) {
     }
   );
 
-  // 3. delete_message
+  // 3. delete_message (Destructive - requires confirm: true)
   server.tool(
     'delete_message',
-    'Delete a specific message from a channel',
+    'Delete a specific message from a channel. Requires confirm: true.',
     {
       channel_id: z.string().describe('Channel Name or ID where the message is located'),
       message_id: z.string().describe('The ID of the message to delete'),
+      confirm: z.boolean().optional().describe('Confirmation flag. Must be true to delete the message'),
       reason: z.string().optional().describe('Reason for deletion (visible in audit log)'),
       guild_id: z.string().optional().describe('Discord Server ID')
     },
-    async ({ channel_id, message_id, reason, guild_id }) => {
+    async ({ channel_id, message_id, confirm, reason, guild_id }) => {
       try {
+        enforceConfirmation('delete_message', `message ${message_id} in channel ${channel_id}`, confirm, config);
+
         const validMsgId = validateSnowflake(message_id, 'message_id');
         const channel = await resolveTextChannel(channel_id, guild_id);
         const guild = await resolveGuild(guild_id);

@@ -55,10 +55,15 @@ async function runTests() {
     ConfirmationRequiredError
   );
   assert.throws(
+    () => enforceConfirmation('delete_message', 'message 123456789012345678 in channel #general', undefined, mockConfig),
+    ConfirmationRequiredError
+  );
+  assert.throws(
     () => enforceConfirmation('kick_member', 'User#1234', false, mockConfig),
     ConfirmationRequiredError
   );
   // Should NOT throw if confirm is true
+  assert.doesNotThrow(() => enforceConfirmation('delete_message', 'message 123456789012345678 in channel #general', true, mockConfig));
   assert.doesNotThrow(() => enforceConfirmation('ban_member', 'User#1234', true, mockConfig));
   console.log('✅ Passed Destructive action confirmation tests.');
 
