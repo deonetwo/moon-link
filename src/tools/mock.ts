@@ -125,7 +125,7 @@ export function registerMockTools(server: McpServer, config: AppConfig) {
     'read_channel_messages',
     '[TEST MODE] Read simulated recent messages from a channel',
     {
-      channel_id: z.string().describe('Channel Name or ID (e.g. "mainframe-channel" or snowflake ID)'),
+      channel_id: z.string().describe('Channel Name or ID (e.g. "bot-commands" or snowflake ID)'),
       limit: z.number().optional().default(10)
     },
     async ({ channel_id }) => {

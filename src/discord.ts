@@ -159,7 +159,7 @@ export async function getBotMember(guild: Guild): Promise<GuildMember> {
  * Accepts:
  * - Snowflake ID (e.g. "1550706214629806221")
  * - Mention syntax (e.g. "<#1550706214629806221>")
- * - Channel name / slug (e.g. "mainframe-channel", "#mainframe-channel", "mainframe channel")
+ * - Channel name / slug (e.g. "bot-commands", "#bot-commands", "bot commands")
  */
 export async function resolveChannel(channelIdentifier: string, guildId?: string): Promise<GuildBasedChannel> {
   if (!channelIdentifier || typeof channelIdentifier !== 'string' || !channelIdentifier.trim()) {
@@ -199,7 +199,7 @@ export async function resolveChannel(channelIdentifier: string, guildId?: string
     // Exact name match (case-insensitive)
     let matches = channelList.filter(c => c.name.toLowerCase() === targetLower);
 
-    // Hyphenated match (e.g. "mainframe channel" -> "mainframe-channel")
+    // Hyphenated match (e.g. "bot commands" -> "bot-commands")
     if (matches.length === 0) {
       matches = channelList.filter(c => c.name.toLowerCase() === targetNormalized);
     }
@@ -209,7 +209,7 @@ export async function resolveChannel(channelIdentifier: string, guildId?: string
       matches = channelList.filter(c => c.name.toLowerCase().replace(/[-_ ]/g, '') === targetStripped);
     }
 
-    // Stripped leading emoji / special characters match (e.g. "💬-mainframe" -> "mainframe")
+    // Stripped leading emoji / special characters match (e.g. "💬-bot-commands" -> "bot-commands")
     if (matches.length === 0) {
       matches = channelList.filter(c => {
         const strippedPrefix = c.name.toLowerCase().replace(/^[^\w\d]+/, '');

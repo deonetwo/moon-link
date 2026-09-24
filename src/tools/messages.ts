@@ -11,7 +11,7 @@ export function registerMessageTools(server: McpServer, config: AppConfig) {
     'send_message',
     'Send a message or embed to a Discord text or announcement channel',
     {
-      channel_id: z.string().describe('Target Discord Channel Name (e.g. "mainframe-channel", "#general") or Snowflake ID'),
+      channel_id: z.string().describe('Target Discord Channel Name (e.g. "bot-commands", "#general") or Snowflake ID'),
       content: z.string().max(2000).optional().describe('Text content of the message (max 2000 characters)'),
       reply_to_message_id: z.string().optional().describe('Optional Message ID to reply to'),
       guild_id: z.string().optional().describe('Discord Server ID'),
@@ -97,7 +97,7 @@ export function registerMessageTools(server: McpServer, config: AppConfig) {
     'read_channel_messages',
     'Read recent messages from a channel (supports limit, before/after filters, channel name or ID)',
     {
-      channel_id: z.string().describe('Channel Name (e.g. "mainframe-channel", "#general") or Snowflake ID to fetch messages from'),
+      channel_id: z.string().describe('Channel Name (e.g. "bot-commands", "#general") or Snowflake ID to fetch messages from'),
       limit: z.number().int().min(1).max(100).optional().describe('Number of messages to retrieve (1-100, default: 25)'),
       before_message_id: z.string().optional().describe('Fetch messages sent before this Message ID'),
       after_message_id: z.string().optional().describe('Fetch messages sent after this Message ID'),
