@@ -1,5 +1,5 @@
 {
-  "name": "moon-link-mcp",
+  "name": "moon-link",
   "version": "1.0.0",
   "description": "Secure Model Context Protocol (MCP) server for managing private Discord servers",
   "main": "dist/index.js",
@@ -9,7 +9,7 @@
     "dev": "tsx src/index.ts",
     "mock": "node dist/index.js --mock",
     "mock:sse": "node dist/index.js --sse --mock",
-    "test": "tsx tests/security.test.ts && tsx tests/channel-resolve.test.ts && tsx tests/mainframe.test.ts",
+    "test": "tsx tests/security.test.ts && tsx tests/channel-resolve.test.ts",
     "test:connection": "tsx scripts/test-connection.ts",
     "test:web": "tsx scripts/start-web-test.ts"
   },

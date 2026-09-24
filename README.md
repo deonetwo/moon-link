@@ -164,8 +164,8 @@ flowchart LR
 
 ### 3. Clone & Install
 ```bash
-git clone https://github.com/deonetwo/moon-link-discord-mcp.git
-cd moon-link-discord-mcp
+git clone https://github.com/deonetwo/moon-link.git
+cd moon-link
 npm install
 ```
 
@@ -243,7 +243,7 @@ In your `claude_desktop_config.json`:
   "mcpServers": {
     "moon-link-discord": {
       "command": "node",
-      "args": ["/absolute/path/to/moon-link-discord-mcp/dist/index.js"],
+      "args": ["/absolute/path/to/moon-link/dist/index.js"],
       "env": {
         "DISCORD_BOT_TOKEN": "your_bot_token_here",
         "DISCORD_GUILD_ID": "your_server_id_here",

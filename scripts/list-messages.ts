@@ -2,9 +2,10 @@ import { loadConfig } from '../src/config.js';
 import { initDiscordClient, resolveTextChannel } from '../src/discord.js';
 
 async function main() {
+  const channelIdentifier = process.argv[2] || 'general';
   const config = loadConfig();
   await initDiscordClient(config);
-  const channel = await resolveTextChannel(config.mainframeChannel || 'mainframe-channel');
+  const channel = await resolveTextChannel(channelIdentifier);
   console.log(`Channel: #${channel.name} (${channel.id})`);
 
   const messages = await channel.messages.fetch({ limit: 50 });

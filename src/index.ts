@@ -1,6 +1,5 @@
 import { loadConfig, maskSecret } from './config.js';
 import { getClient, initDiscordClient } from './discord.js';
-import { initMainframeBridge } from './mainframe.js';
 import { runSseServer } from './transports/sse.js';
 
 // =========================================================================
@@ -63,12 +62,9 @@ async function main() {
   try {
     // 1. Connect Discord Bot Gateway with fault tolerance
     console.error('[Discord] Connecting to Discord Gateway...');
-    const client = await initDiscordClient(config);
+    await initDiscordClient(config);
 
-    // 2. Initialize Mainframe Bridge (Discord #mainframe-channel <-> AGY CLI)
-    initMainframeBridge(client, config);
-
-    // 3. Launch production remote SSE transport
+    // 2. Launch production remote SSE transport
     console.error('[MCP] Starting remote SSE server...');
     await runSseServer(config);
   } catch (err: any) {
