@@ -204,29 +204,91 @@ npm test
 ```
 All 10 automated security and architecture tests will execute and pass.
 
+### 6. Install & Run Moon-Link Service (Background Daemon)
+Moon-Link runs an HTTP/SSE server on `127.0.0.1:3000`. To ensure it runs continuously in the background and restarts automatically on crash or boot, install it as a systemd service:
+
+```bash
+# Automatically configure and enable the systemd service
+bash scripts/setup-systemd.sh
+
+# Start the service
+sudo systemctl start moon-link
+
+# Verify it is running and listening on port 3000
+sudo systemctl status moon-link
+```
+
+Alternatively, for local interactive testing without systemd:
+```bash
+npm start
+```
+
+### 7. Cloudflare Tunnel Setup (Remote Access)
+Cloudflare Tunnel (`cloudflared`) securely connects Moon-Link on `127.0.0.1:3000` to external clients without opening inbound firewall ports or exposing your server's IP address.
+
+#### Method A: Production Named Tunnel with Custom Domain (Recommended)
+1. **Install `cloudflared`**:
+   ```bash
+   # Debian / Ubuntu
+   curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /etc/apt/trusted.gpg.d/cloudflare.gpg >/dev/null
+   echo 'deb [signed-by=/etc/apt/trusted.gpg.d/cloudflare.gpg] https://pkg.cloudflare.com/cloudflared jammy main' | sudo tee /etc/apt/sources.list.d/cloudflared.list
+   sudo apt update && sudo apt install -y cloudflared
+   ```
+
+2. **Configure via Cloudflare Zero Trust Dashboard**:
+   - Go to [Cloudflare Zero Trust](https://one.dash.cloudflare.com/) > **Networks** > **Tunnels** > **Create a Tunnel**.
+   - Select **cloudflared** and give your tunnel a name.
+   - Install the connector daemon using the token command provided by Cloudflare:
+     ```bash
+     sudo cloudflared service install <YOUR_CLOUDFLARE_TUNNEL_TOKEN>
+     ```
+     *(Note: Keep your tunnel token private. Never commit it to git).*
+   - In the **Public Hostnames** tab of your tunnel configuration:
+     - **Subdomain**: e.g., `mcp`
+     - **Domain**: `yourdomain.com`
+     - **Type**: `HTTP`
+     - **URL**: `127.0.0.1:3000` (or `localhost:3000`)
+   - Save the hostname.
+
+3. **Start and Verify the Tunnel Daemon**:
+   ```bash
+   sudo systemctl enable --now cloudflared
+   sudo systemctl status cloudflared
+   ```
+
+#### Method B: Quick Tunnel (Temporary Testing without Domain)
+If you do not have a custom domain, you can spin up an ephemeral Cloudflare Quick Tunnel:
+```bash
+cloudflared tunnel --url http://127.0.0.1:3000
+```
+This generates a temporary URL in the terminal (e.g. `https://<random-subdomain>.trycloudflare.com`).
+
 ---
 
 ## 🌐 Connecting MCP Clients
 
 ### Option A: Google Gemini Spark (Remote HTTPS over Cloudflare Tunnel)
 
-1. **Start the MCP server**:
+1. **Verify both services are running**:
    ```bash
-   sudo systemctl start moon-link
+   # 1. Moon-Link MCP backend
+   sudo systemctl status moon-link
+
+   # 2. Cloudflare Tunnel client
+   sudo systemctl status cloudflared
    ```
-2. **Start the Cloudflare Tunnel**:
-   ```bash
-   sudo systemctl start cloudflared-quick
-   ```
-   Retrieve your tunnel URL:
-   ```bash
-   sudo journalctl -u cloudflared-quick -n 30 --no-pager | grep -E "https://[a-zA-Z0-9-]+\.trycloudflare\.com"
-   ```
-3. **Connect in Gemini Spark**:
-   Paste the full URL with the authentication token:
+
+2. **Connect in Gemini Spark**:
+   Construct your endpoint URL using your domain and auth token:
    ```text
-   https://<your-tunnel-subdomain>.trycloudflare.com/sse?token=<MCP_AUTH_TOKEN>
+   # Named Tunnel:
+   https://mcp.yourdomain.com/sse?token=<YOUR_MCP_AUTH_TOKEN>
+
+   # Quick Tunnel:
+   https://<your-tunnel-subdomain>.trycloudflare.com/sse?token=<YOUR_MCP_AUTH_TOKEN>
    ```
+   *(Replace `<YOUR_MCP_AUTH_TOKEN>` with the value of `MCP_AUTH_TOKEN` configured in your `.env`)*.
+
    Gemini Spark will automatically:
    - Probe reachability via `HEAD /sse` (Returns `200 OK`)
    - Discover OAuth metadata via `GET /.well-known/oauth-protected-resource` (Returns `200 OK`)
@@ -286,20 +348,31 @@ To keep both the MCP server and Cloudflare Tunnel running 24/7 with automatic re
 
 ```bash
 # Manage Moon-Link MCP Daemon
-sudo systemctl start moon-link
-sudo systemctl stop moon-link
-sudo systemctl restart moon-link
-sudo systemctl status moon-link
+sudo systemctl start moon-link       # Start MCP server
+sudo systemctl stop moon-link        # Stop MCP server
+sudo systemctl restart moon-link     # Restart MCP server
+sudo systemctl status moon-link      # Check status
+sudo journalctl -u moon-link -f      # View live logs
 
 # Manage Cloudflare Tunnel Daemon
-sudo systemctl start cloudflared-quick
-sudo systemctl stop cloudflared-quick
-sudo systemctl restart cloudflared-quick
-sudo systemctl status cloudflared-quick
-
-# View Live Logs (Tokens are automatically sanitized)
-sudo journalctl -u moon-link -f
+sudo systemctl start cloudflared     # Start tunnel
+sudo systemctl stop cloudflared      # Stop tunnel
+sudo systemctl restart cloudflared   # Restart tunnel
+sudo systemctl status cloudflared    # Check status
+sudo journalctl -u cloudflared -f    # View live tunnel traffic logs
 ```
+
+---
+
+## 🔧 Troubleshooting
+
+| Issue | Root Cause | Resolution |
+| :--- | :--- | :--- |
+| `dial tcp 127.0.0.1:3000: connect: connection refused` / `502 Bad Gateway` | Moon-Link server is not running or crashed. | Check service status with `sudo systemctl status moon-link`. Start or restart with `sudo systemctl restart moon-link`. **A full machine/system reboot is never needed.** |
+| `Unit moon-link.service could not be found` | The systemd service has not been installed yet. | Run `bash scripts/setup-systemd.sh` to generate and enable the systemd service file. |
+| `HTTP 401 Unauthorized` | Invalid or missing authentication token. | Verify that the `?token=<YOUR_MCP_AUTH_TOKEN>` appended to your URL exactly matches `MCP_AUTH_TOKEN` in your `.env`. |
+| `Unable to reach the origin service` | Cloudflare tunnel cannot reach `127.0.0.1:3000`. | Ensure Moon-Link is active on port 3000 (`sudo systemctl status moon-link`) and Cloudflare hostname points to `http://127.0.0.1:3000`. |
+| `Rate limit exceeded (HTTP 429)` | Exceeded 180 requests/minute rate limit. | Wait 60 seconds before making new requests. |
 
 ---
 
